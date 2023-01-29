@@ -1,0 +1,102 @@
+---
+
+- name: SSH CONECT
+  hosts: [serverb]
+  become: yes
+
+  tasks:
+
+  - name: GG
+    lineinfile:
+     path: /etc/ssh/sshd_config
+     regexp: "^PasswordAuthentication"
+     line: "PasswordAuthentication no"
+     state: present
+    notify:
+      - restert sshd
+
+- hosts: [serverb]
+  become: true
+  tasks:
+
+  - name: create user DevOps
+    tags: always
+    user:
+      name: DevOps
+      groups: root
+ 
+  - name: add ssh key for DevOps
+    tags: always
+    authorized_key:
+      user: DevOps
+      key: "{{ lookup('file','/home/servera/.ssh/serverb.pub') }}"
+
+  - name: add sudoers file for DevOps
+    tags: always
+    copy:
+      src: sudoer_DevOps
+      dest: /etc/sudoers.d/DevOps
+      owner: root
+      group: root
+      mode: 0440
+
+- name: postgresql
+  hosts: [serverb]
+  become: true
+  vars:
+    postgresql_version: "14"
+    postgresql_bin_path: "/usr/lib/postgresql/{{ postgresql_version }}/bin"
+    postgresql_ssh_pipelining: true
+  tasks:
+    - name: Install packages
+      ansible.builtin.apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - libpq-dev
+          - python3-psycopg2
+        state: present
+
+    - name: check PostgreSQL initialized
+      stat:
+        path: "/var/lib/pgsql/data/pg_hba.conf"
+      register: postgres_data
+
+    - name: Empty data dir
+      ansible.builtin.file:
+        path: "{{ postgresql_data_dir }}"
+        state: absent
+      when: not postgres_data
+
+    - name: Initialize PostgreSQL
+      ansible.builtin.shell: "{{ postgresql_bin_path }}/iitdb -D {{ postgresql_data_dir }}"
+      become: true
+      become_user: developer
+      when: not postgres_data
+
+    - name: start and enable service
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+        enabled: true
+ 
+    - name: restart postgres
+      service: name=postgresql state=restarted
+
+- name: postgressql database
+  hosts: [serverb]
+  become: true
+  vars:
+    db_name: myapp
+  tasks:
+    - name: Utility present
+      ansible.builtin.package:
+        name: python3-psycopg2
+        state: present
+
+    - name: Create myapp database
+      community.postgresql.postgresql_db:
+        state: present
+        name: "{{ db_name }} "
+      become: true
+      become_user: postgres
